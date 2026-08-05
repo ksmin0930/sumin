@@ -443,6 +443,25 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
 
+def restricted_fund_table(source: pd.DataFrame, selected: object) -> pd.DataFrame:
+    """입력 시트에서 용도제한여부가 Y인 항목만 집계한다."""
+    if source.empty:
+        return pd.DataFrame(columns=["항목", "금액"])
+    df = filter_month(source, selected)
+    restricted_col = find_col(df, ["용도제한여부"], required=False)
+    item_col = find_col(df, ["항목", "세부항목", "계정명", "내역", "예금명", "세부내역"], required=False)
+    amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
+    if not restricted_col or not item_col or not amount_col:
+        return pd.DataFrame(columns=["항목", "금액"])
+    y_rows = df[df[restricted_col].astype(str).str.strip().str.upper().eq("Y")]
+    result = pd.DataFrame({
+        "항목": y_rows[item_col].fillna("미분류").astype(str).to_numpy(),
+        "금액": y_rows[amount_col].map(money).to_numpy(),
+    })
+    result = result[result["금액"] != 0]
+    return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
+
+
 def plot_layout(height: int = 390) -> dict:
     return dict(
         height=height, margin=dict(l=25, r=25, t=35, b=35),
@@ -642,7 +661,7 @@ try:
     available_ratio = available / net_assets if net_assets else 0
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = category_table(source, selected, ["보통예금", "예금"])
-    limits = category_table(source, selected, ["용도제한", "제한자금"])
+    limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
@@ -733,7 +752,7 @@ try:
     with lower2:
         section("용도제한자금 구성")
         if limits.empty:
-            empty_state("용도제한자금 상세 항목을 인식하지 못했습니다. 입력 시트의 분류명이 ‘용도제한자금’인지 확인해 주세요.")
+            empty_state("용도제한자금 항목이 없습니다. 입력 시트의 ‘용도제한여부’ 열에 Y가 표시되어 있는지 확인해 주세요.")
         else:
             ordered = limits.sort_values("금액", ascending=False)
             st.markdown(f'<div class="table-frame compact">{html_money_table(ordered)}</div>', unsafe_allow_html=True)
