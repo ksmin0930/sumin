@@ -655,14 +655,15 @@ try:
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
     net_assets = pick_metric(summary_row, ["순자금", "순자산", "순유동자산"]) or liquid_assets - liquid_debt
-    restricted = pick_metric(summary_row, ["용도제한자금", "제한자금"])
-    available = pick_metric(summary_row, ["운영가능자금", "사용가능자금"]) or net_assets - restricted
-    debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
-    available_ratio = available / net_assets if net_assets else 0
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = category_table(source, selected, ["보통예금", "예금"])
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
+    # 용도제한자금은 입력 시트의 용도제한여부=Y 항목 합계로 일관되게 계산한다.
+    restricted = float(limits["금액"].sum()) if not limits.empty else 0.0
+    available = net_assets - restricted
+    debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
+    available_ratio = available / net_assets if net_assets else 0
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
                 f'<p>{escape(month_label(selected))} 기준 · {escape(data_source)}</p></div>', unsafe_allow_html=True)
@@ -676,44 +677,32 @@ try:
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
 
-    # 두 핵심 영역을 같은 비중으로 두고, 차트 높이도 통일해 한 줄의 균형을 맞춘다.
-    top_left, top_right = st.columns([1, 1], gap="small")
+    # 5단계 폭포수의 항목명과 금액이 충분히 보이도록 차트 영역을 더 넓게 둔다.
+    top_left, top_right = st.columns([1.35, 1], gap="small")
     with top_left:
         section("자금 흐름 구조")
-        flow = filter_month(sheets[SHEET_FLOW], selected)
-        flow_label = find_col(flow, ["항목", "구분", "단계", "자금흐름"])
-        flow_amount = find_col(flow, ["금액", "값", "금액원", "잔액"])
-        flow = flow[[flow_label, flow_amount]].dropna(subset=[flow_label]).copy()
-        flow[flow_amount] = flow[flow_amount].map(money)
-        # 원본 시트의 차감 항목이 양수로 저장되어도 KPI 산식과 같은 방향으로 그린다.
-        chart_values, measures = [], []
-        for _, row in flow.iterrows():
-            label = str(row[flow_label]).replace(" ", "")
-            value = float(row[flow_amount])
-            if "유동자산" in label:
-                value, measure = liquid_assets, "absolute"
-            elif "유동부채" in label:
-                value, measure = -abs(liquid_debt), "relative"
-            elif "순자금" in label:
-                value, measure = net_assets, "total"
-            elif "용도제한" in label:
-                value, measure = -abs(restricted), "relative"
-            elif "운영가능" in label:
-                value, measure = available, "total"
-            else:
-                measure = "relative"
-            chart_values.append(value)
-            measures.append(measure)
+        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
+        chart_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
+        measures = ["absolute", "relative", "total", "relative", "total"]
+        chart_text = [
+            won(liquid_assets), f"−{won(abs(liquid_debt))}", won(net_assets),
+            f"−{won(abs(restricted))}", won(available),
+        ]
         fig_flow = go.Figure(go.Waterfall(
-            measure=measures, x=flow[flow_label], y=chart_values,
-            text=[won(v) for v in chart_values], textposition="outside",
-            textfont=dict(size=15, color=INK),
+            measure=measures, x=flow_labels, y=chart_values,
+            text=chart_text, textposition="outside",
+            textfont=dict(size=14, color=INK),
             increasing={"marker": {"color": GREEN_2}}, decreasing={"marker": {"color": RED}},
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        fig_flow.update_layout(**plot_layout(350), showlegend=False)
-        fig_flow.update_yaxes(tickformat="~s", gridcolor="#E9EEE9", title=None)
+        fig_flow.update_layout(
+            **plot_layout(390), showlegend=False,
+            waterfallgap=0.28,
+            margin=dict(l=35, r=25, t=48, b=58),
+            xaxis=dict(tickfont=dict(size=13), automargin=True),
+        )
+        fig_flow.update_yaxes(tickformat="~s", gridcolor="#E9EEE9", title=None, automargin=True)
         st.plotly_chart(fig_flow, use_container_width=True, config={"displayModeBar": False})
 
     with top_right:
