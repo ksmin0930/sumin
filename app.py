@@ -79,7 +79,7 @@ st.markdown(
     .kpi-sub{background:var(--bg);padding:.36rem .15rem;font-size:.88rem;color:#343940;white-space:nowrap}
     .simple-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.88rem}
     .simple-table th{background:#E7EEF9;padding:.42rem .48rem;text-align:right;white-space:nowrap}.simple-table th:first-child{text-align:left}
-    .simple-table td{padding:.38rem .48rem;border-bottom:1px solid #ECEDEF;text-align:right;white-space:nowrap}.simple-table td:first-child{text-align:left;white-space:normal;overflow-wrap:anywhere}
+    .simple-table td{padding:.38rem .48rem;border-bottom:1px solid #ECEDEF;text-align:right;white-space:nowrap}.simple-table td:first-child{text-align:left;white-space:nowrap;overflow-wrap:normal}
     .simple-table tfoot td{font-weight:900;border-top:2px solid #C9CDD3;border-bottom:0}
     .simple-table .col-item{width:auto}.simple-table .col-money{width:42%}.simple-table .col-share{width:22%}
     .table-frame{min-height:350px;background:#fff;border:1px solid #E1E4E8;border-radius:4px;overflow:hidden}
