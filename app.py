@@ -666,12 +666,28 @@ try:
         flow_amount = find_col(flow, ["금액", "값", "금액원", "잔액"])
         flow = flow[[flow_label, flow_amount]].dropna(subset=[flow_label]).copy()
         flow[flow_amount] = flow[flow_amount].map(money)
-        measures = ["relative"] * len(flow)
-        if measures:
-            measures[0], measures[-1] = "absolute", "total"
+        # 원본 시트의 차감 항목이 양수로 저장되어도 KPI 산식과 같은 방향으로 그린다.
+        chart_values, measures = [], []
+        for _, row in flow.iterrows():
+            label = str(row[flow_label]).replace(" ", "")
+            value = float(row[flow_amount])
+            if "유동자산" in label:
+                value, measure = liquid_assets, "absolute"
+            elif "유동부채" in label:
+                value, measure = -abs(liquid_debt), "relative"
+            elif "순자금" in label:
+                value, measure = net_assets, "total"
+            elif "용도제한" in label:
+                value, measure = -abs(restricted), "relative"
+            elif "운영가능" in label:
+                value, measure = available, "total"
+            else:
+                measure = "relative"
+            chart_values.append(value)
+            measures.append(measure)
         fig_flow = go.Figure(go.Waterfall(
-            measure=measures, x=flow[flow_label], y=flow[flow_amount],
-            text=[won(v) for v in flow[flow_amount]], textposition="outside",
+            measure=measures, x=flow[flow_label], y=chart_values,
+            text=[won(v) for v in chart_values], textposition="outside",
             textfont=dict(size=15, color=INK),
             increasing={"marker": {"color": GREEN_2}}, decreasing={"marker": {"color": RED}},
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
