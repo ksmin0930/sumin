@@ -699,7 +699,6 @@ try:
         fig_flow.update_layout(
             **plot_layout(390), showlegend=False,
             waterfallgap=0.28,
-            margin=dict(l=35, r=25, t=48, b=58),
             xaxis=dict(tickfont=dict(size=13), automargin=True),
         )
         fig_flow.update_yaxes(tickformat="~s", gridcolor="#E9EEE9", title=None, automargin=True)
