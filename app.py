@@ -444,7 +444,7 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
 
 
 def restricted_fund_table(source: pd.DataFrame, selected: object) -> pd.DataFrame:
-    """입력 시트에서 용도제한여부가 Y인 항목만 집계한다."""
+    """입력 시트에서 '용도제한여부'가 Y인 항목만 집계한다."""
     if source.empty:
         return pd.DataFrame(columns=["항목", "금액"])
     df = filter_month(source, selected)
@@ -655,15 +655,14 @@ try:
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
     net_assets = pick_metric(summary_row, ["순자금", "순자산", "순유동자산"]) or liquid_assets - liquid_debt
+    restricted = pick_metric(summary_row, ["용도제한자금", "제한자금"])
+    available = pick_metric(summary_row, ["운영가능자금", "사용가능자금"]) or net_assets - restricted
+    debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
+    available_ratio = available / net_assets if net_assets else 0
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = category_table(source, selected, ["보통예금", "예금"])
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
-    # 용도제한자금은 입력 시트의 용도제한여부=Y 항목 합계로 일관되게 계산한다.
-    restricted = float(limits["금액"].sum()) if not limits.empty else 0.0
-    available = net_assets - restricted
-    debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
-    available_ratio = available / net_assets if net_assets else 0
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
                 f'<p>{escape(month_label(selected))} 기준 · {escape(data_source)}</p></div>', unsafe_allow_html=True)
@@ -677,31 +676,29 @@ try:
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
 
-    # 폭포수는 간결하게, 보통예금 구성은 항목 정보가 잘 보이도록 더 넓게 배치한다.
-    top_left, top_right = st.columns([1, 1.3], gap="small")
+    # 폭포수보다 보통예금 영역을 넓혀 도넛의 항목명과 비율이 잘리지 않게 한다.
+    top_left, top_right = st.columns([.82, 1.18], gap="small")
     with top_left:
         section("자금 흐름 구조")
+        # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
+        # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
         flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
-        chart_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
+        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
         measures = ["absolute", "relative", "total", "relative", "total"]
-        chart_text = [
-            won(liquid_assets), f"−{won(abs(liquid_debt))}", won(net_assets),
-            f"−{won(abs(restricted))}", won(available),
-        ]
         fig_flow = go.Figure(go.Waterfall(
-            measure=measures, x=flow_labels, y=chart_values,
-            text=chart_text, textposition="outside",
-            textfont=dict(size=14, color=INK),
+            measure=measures, x=flow_labels, y=flow_values,
+            text=[won(v) for v in flow_values], textposition="outside",
+            textfont=dict(size=15, color=INK),
             increasing={"marker": {"color": GREEN_2}}, decreasing={"marker": {"color": RED}},
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        fig_flow.update_layout(
-            **plot_layout(360), showlegend=False,
-            waterfallgap=0.28,
-            xaxis=dict(tickfont=dict(size=13), automargin=True),
+        fig_flow.update_layout(**plot_layout(350), showlegend=False)
+        fig_flow.update_xaxes(tickfont=dict(size=13, color="#000000"), title=None)
+        fig_flow.update_yaxes(
+            tickformat="~s", gridcolor="#E9EEE9", title=None,
+            tickfont=dict(size=12, color="#000000"),
         )
-        fig_flow.update_yaxes(tickformat="~s", gridcolor="#E9EEE9", title=None, automargin=True)
         st.plotly_chart(fig_flow, use_container_width=True, config={"displayModeBar": False})
 
     with top_right:
@@ -709,18 +706,18 @@ try:
         if deposits.empty:
             empty_state("보통예금 상세 항목을 인식하지 못했습니다. 아래 ‘검산·원본’ 화면에서 입력 시트의 열 이름을 확인해 주세요.")
         else:
-            # 항목명과 비율이 잘 보이도록 도넛 영역을 표보다 넓게 배치한다.
-            chart_col, table_col = st.columns([1.4, 1], gap="small")
+            # 도넛을 표보다 넓게 배치해 항목명과 비율을 차트 안에서 충분히 보여준다.
+            chart_col, table_col = st.columns([1.42, 1], gap="small")
             with chart_col:
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
                     marker=dict(colors=[GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]),
-                    textinfo="label+percent", textposition="auto", textfont=dict(size=14),
+                    textinfo="label+percent", textposition="auto", textfont=dict(size=15, color="#000000"),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=17, color=INK))
                 fig.update_layout(
-                    **plot_layout(370),
+                    **plot_layout(350),
                     showlegend=False,
                     uniformtext_minsize=12,
                     uniformtext_mode="hide",
