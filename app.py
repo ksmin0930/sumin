@@ -677,8 +677,8 @@ try:
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
 
-    # 5단계 폭포수의 항목명과 금액이 충분히 보이도록 차트 영역을 더 넓게 둔다.
-    top_left, top_right = st.columns([1.35, 1], gap="small")
+    # 폭포수는 간결하게, 보통예금 구성은 항목 정보가 잘 보이도록 더 넓게 배치한다.
+    top_left, top_right = st.columns([1, 1.3], gap="small")
     with top_left:
         section("자금 흐름 구조")
         flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
@@ -697,7 +697,7 @@ try:
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
         fig_flow.update_layout(
-            **plot_layout(390), showlegend=False,
+            **plot_layout(360), showlegend=False,
             waterfallgap=0.28,
             xaxis=dict(tickfont=dict(size=13), automargin=True),
         )
@@ -709,8 +709,8 @@ try:
         if deposits.empty:
             empty_state("보통예금 상세 항목을 인식하지 못했습니다. 아래 ‘검산·원본’ 화면에서 입력 시트의 열 이름을 확인해 주세요.")
         else:
-            # 도넛이 표에 눌려 작아 보이지 않도록 그래프와 표를 거의 반반 배치한다.
-            chart_col, table_col = st.columns([1, 1.12], gap="small")
+            # 항목명과 비율이 잘 보이도록 도넛 영역을 표보다 넓게 배치한다.
+            chart_col, table_col = st.columns([1.4, 1], gap="small")
             with chart_col:
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
@@ -720,7 +720,7 @@ try:
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=17, color=INK))
                 fig.update_layout(
-                    **plot_layout(350),
+                    **plot_layout(370),
                     showlegend=False,
                     uniformtext_minsize=12,
                     uniformtext_mode="hide",
