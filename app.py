@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import io
+import base64
+import hashlib
+import hmac
+import json
 import re
+import sqlite3
+import zipfile
+from datetime import datetime
 from html import escape
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
-
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-except ImportError:
-    gspread = None
-    Credentials = None
-
 
 st.set_page_config(
     page_title="한살림생산자연합회 자금현황",
@@ -28,8 +29,12 @@ SHEET_INPUT = "01_자금현황_입력"
 SHEET_SUMMARY = "02_월별요약_Looker"
 SHEET_FLOW = "03_자금흐름_Looker"
 SHEET_POINTS = "09_주요 포인트"
-DEFAULT_SPREADSHEET_ID = "1fr-An3ezXl9SyO72WfDKKlM4yPN6XTE2_pckjzp2zOM"
 SYNC_SHEETS = (SHEET_INPUT, SHEET_SUMMARY, SHEET_FLOW)
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
+DB_PATH = DATA_DIR / "fund_data.db"
+GITHUB_API = "https://api.github.com"
 
 GREEN = "#176B4B"
 GREEN_2 = "#3E8E6A"
@@ -72,10 +77,13 @@ st.markdown(
     .kpi-main{font-size:1.78rem;padding:.3rem .15rem .22rem;color:#3E434A;white-space:nowrap}
     .kpi-main small{font-size:.72rem;margin-left:.28rem}
     .kpi-sub{background:var(--bg);padding:.36rem .15rem;font-size:.88rem;color:#343940;white-space:nowrap}
-    .simple-table{width:100%;border-collapse:collapse;font-size:.88rem}
-    .simple-table th{background:#E7EEF9;padding:.38rem;text-align:right}.simple-table th:first-child{text-align:left}
-    .simple-table td{padding:.32rem .38rem;border-bottom:1px solid #ECEDEF;text-align:right}.simple-table td:first-child{text-align:left}
+    .simple-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.88rem}
+    .simple-table th{background:#E7EEF9;padding:.42rem .48rem;text-align:right;white-space:nowrap}.simple-table th:first-child{text-align:left}
+    .simple-table td{padding:.38rem .48rem;border-bottom:1px solid #ECEDEF;text-align:right;white-space:nowrap}.simple-table td:first-child{text-align:left;white-space:normal;overflow-wrap:anywhere}
     .simple-table tfoot td{font-weight:900;border-top:2px solid #C9CDD3;border-bottom:0}
+    .simple-table .col-item{width:auto}.simple-table .col-money{width:42%}.simple-table .col-share{width:22%}
+    .table-frame{min-height:330px;background:#fff;border:1px solid #E1E4E8;border-radius:4px;overflow:hidden}
+    .table-frame.compact{min-height:255px}
     @media(max-width:1000px){.kpi-grid{grid-template-columns:1fr}.op{height:18px;line-height:18px}.block-container{padding:.6rem}}
     .empty {background:#F9FBFA; border:1px dashed #9BB1A4; border-radius:14px; padding:1.35rem; color:#566A5F; font-size:1rem;}
     .upload-welcome {background:#FFFFFF; border:2px dashed #8EB09D; border-radius:20px; padding:2.2rem; text-align:center; margin-top:1rem;}
@@ -111,48 +119,61 @@ def clean_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, ~df.columns.str.startswith("Unnamed")]
 
 
-def google_configured() -> bool:
+def init_storage() -> None:
+    DATA_DIR.mkdir(exist_ok=True)
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute("""CREATE TABLE IF NOT EXISTS monthly_sheets (
+            month_key TEXT NOT NULL, sheet_name TEXT NOT NULL, data_json TEXT NOT NULL,
+            original_filename TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (month_key, sheet_name))""")
+        con.commit()
+
+
+def secret(name: str, default: str = "") -> str:
     try:
-        return "gcp_service_account" in st.secrets
+        return str(st.secrets.get(name, default)).strip()
     except Exception:
-        return False
+        return default
 
 
-def google_client():
-    if not google_configured():
-        raise ValueError("Google Sheets 쓰기 설정이 없습니다. README의 ‘Google Sheets 연결’ 단계를 먼저 진행해 주세요.")
-    if gspread is None or Credentials is None:
-        raise ValueError("Google Sheets 연결 패키지가 설치되지 않았습니다. requirements.txt를 다시 설치해 주세요.")
-    info = dict(st.secrets["gcp_service_account"])
-    credentials = Credentials.from_service_account_info(
-        info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+def remote_storage_ready() -> bool:
+    return bool(secret("GITHUB_TOKEN") and secret("GITHUB_DATA_REPO"))
+
+
+def github_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {secret('GITHUB_TOKEN')}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def github_request(method: str, path: str, **kwargs):
+    response = requests.request(
+        method,
+        f"{GITHUB_API}{path}",
+        headers=github_headers(),
+        timeout=30,
+        **kwargs,
     )
-    return gspread.authorize(credentials)
+    if response.status_code >= 400:
+        detail = response.json().get("message", response.text) if response.content else "응답 없음"
+        raise RuntimeError(f"비공개 저장소 연결 오류 ({response.status_code}): {detail}")
+    return response
 
 
-def spreadsheet_id() -> str:
-    return str(st.secrets.get("spreadsheet_id", DEFAULT_SPREADSHEET_ID))
+def month_key(value: object) -> str:
+    label = month_label(value)
+    match = re.search(r"(20\d{2}).*?(\d{1,2})", label)
+    return f"{match.group(1)}-{int(match.group(2)):02d}" if match else label
 
 
-def records_to_frame(values: list[list[str]]) -> pd.DataFrame:
-    if not values:
-        return pd.DataFrame()
-    width = max(len(row) for row in values)
-    rows = [row + [""] * (width - len(row)) for row in values]
-    headers = [str(v).strip() or f"열_{i+1}" for i, v in enumerate(rows[0])]
-    return clean_frame(pd.DataFrame(rows[1:], columns=headers))
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def load_google_sheets(sheet_id: str) -> dict[str, pd.DataFrame]:
-    book = google_client().open_by_key(sheet_id)
-    result: dict[str, pd.DataFrame] = {}
-    for worksheet in book.worksheets():
-        values = worksheet.get_all_values()
-        if values:
-            result[worksheet.title.strip()] = records_to_frame(values)
-    return result
+def frame_for_month(df: pd.DataFrame, key: str) -> pd.DataFrame:
+    col = find_col(df, ["기준월", "월", "년월", "기준년월"], required=False)
+    if not col:
+        return df.copy()
+    return df[df[col].map(month_key) == key].copy()
 
 
 def month_keys(df: pd.DataFrame) -> set[str]:
@@ -162,54 +183,175 @@ def month_keys(df: pd.DataFrame) -> set[str]:
     return {month_label(value) for value in df[col].dropna() if str(value).strip()}
 
 
-def merge_by_month(existing: pd.DataFrame, incoming: pd.DataFrame, uploaded_months: set[str]) -> pd.DataFrame:
-    incoming = clean_frame(incoming)
-    if existing.empty:
-        return incoming
-    old_month_col = find_col(existing, ["기준월", "월", "년월", "기준년월"], required=False)
-    new_month_col = find_col(incoming, ["기준월", "월", "년월", "기준년월"], required=False)
-    if not old_month_col or not new_month_col:
-        return incoming
-    keep = existing[~existing[old_month_col].map(month_label).isin(uploaded_months)].copy()
-    columns = list(dict.fromkeys([*keep.columns, *incoming.columns]))
-    return pd.concat([keep.reindex(columns=columns), incoming.reindex(columns=columns)], ignore_index=True)
-
-
-def sheet_values(df: pd.DataFrame) -> list[list[object]]:
-    safe = df.copy().fillna("")
-    for column in safe.columns:
-        safe[column] = safe[column].map(
-            lambda value: value.isoformat() if isinstance(value, (pd.Timestamp,)) else value
-        )
-    return [safe.columns.tolist(), *safe.astype(object).values.tolist()]
-
-
-def save_workbook_to_google(incoming: dict[str, pd.DataFrame]) -> tuple[list[str], set[str]]:
+def save_workbook_local(incoming: dict[str, pd.DataFrame], raw: bytes, filename: str) -> tuple[list[str], set[str]]:
     summary = incoming[SHEET_SUMMARY]
-    uploaded_months = month_keys(summary)
+    uploaded_months = {month_key(v) for v in summary[find_col(summary, ["기준월", "월", "년월", "기준년월"])].dropna()}
     if not uploaded_months:
         raise ValueError("업로드 파일에서 저장할 기준월을 찾지 못했습니다.")
-    book = google_client().open_by_key(spreadsheet_id())
+    now = datetime.now().isoformat(timespec="seconds")
     saved: list[str] = []
-    for name in SYNC_SHEETS:
-        if name not in incoming:
-            if name in (SHEET_SUMMARY, SHEET_FLOW):
-                raise ValueError(f"필수 시트가 없습니다: {name}")
-            continue
-        try:
-            worksheet = book.worksheet(name)
-            existing = records_to_frame(worksheet.get_all_values())
-        except gspread.WorksheetNotFound:
-            worksheet = book.add_worksheet(title=name, rows=100, cols=max(10, len(incoming[name].columns)))
-            existing = pd.DataFrame()
-        merged = merge_by_month(existing, incoming[name], uploaded_months)
-        values = sheet_values(merged)
-        worksheet.clear()
-        worksheet.resize(rows=max(100, len(values) + 20), cols=max(10, len(values[0]) + 2))
-        worksheet.update(values=values, range_name="A1", value_input_option="USER_ENTERED")
-        saved.append(name)
-    load_google_sheets.clear()
+    with sqlite3.connect(DB_PATH) as con:
+        for key in uploaded_months:
+            for name in SYNC_SHEETS:
+                if name not in incoming:
+                    if name in (SHEET_SUMMARY, SHEET_FLOW):
+                        raise ValueError(f"필수 시트가 없습니다: {name}")
+                    continue
+                frame = frame_for_month(incoming[name], key)
+                if frame.empty and find_col(incoming[name], ["기준월", "월", "년월", "기준년월"], required=False):
+                    continue
+                payload = frame.to_json(orient="table", date_format="iso", force_ascii=False)
+                con.execute("""INSERT OR REPLACE INTO monthly_sheets
+                    (month_key, sheet_name, data_json, original_filename, updated_at)
+                    VALUES (?, ?, ?, ?, ?)""", (key, name, payload, filename, now))
+                saved.append(name)
+        con.commit()
+    safe_name = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", Path(filename).name)
+    for key in uploaded_months:
+        (UPLOAD_DIR / f"{key}_{safe_name}").write_bytes(raw)
     return saved, uploaded_months
+
+
+def monthly_archive(incoming: dict[str, pd.DataFrame], raw: bytes, filename: str, key: str) -> bytes:
+    buffer = io.BytesIO()
+    meta = {
+        "month_key": key,
+        "original_filename": Path(filename).name,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("metadata.json", json.dumps(meta, ensure_ascii=False))
+        for name in SYNC_SHEETS:
+            if name not in incoming:
+                if name in (SHEET_SUMMARY, SHEET_FLOW):
+                    raise ValueError(f"필수 시트가 없습니다: {name}")
+                continue
+            frame = frame_for_month(incoming[name], key)
+            if frame.empty and find_col(incoming[name], ["기준월", "월", "년월", "기준년월"], required=False):
+                continue
+            archive.writestr(
+                f"sheets/{name}.json",
+                frame.to_json(orient="table", date_format="iso", force_ascii=False),
+            )
+        archive.writestr(f"original/{Path(filename).name}", raw)
+    return buffer.getvalue()
+
+
+def github_content(path: str) -> tuple[bytes | None, str | None]:
+    repo = secret("GITHUB_DATA_REPO")
+    response = requests.get(
+        f"{GITHUB_API}/repos/{repo}/contents/{path}",
+        headers=github_headers(),
+        timeout=30,
+    )
+    if response.status_code == 404:
+        return None, None
+    if response.status_code >= 400:
+        detail = response.json().get("message", response.text)
+        raise RuntimeError(f"비공개 저장소 읽기 오류 ({response.status_code}): {detail}")
+    payload = response.json()
+    return base64.b64decode(payload["content"]), payload["sha"]
+
+
+def save_workbook_remote(incoming: dict[str, pd.DataFrame], raw: bytes, filename: str) -> tuple[list[str], set[str]]:
+    summary = incoming[SHEET_SUMMARY]
+    col = find_col(summary, ["기준월", "월", "년월", "기준년월"])
+    uploaded_months = {month_key(v) for v in summary[col].dropna()}
+    if not uploaded_months:
+        raise ValueError("업로드 파일에서 저장할 기준월을 찾지 못했습니다.")
+    repo = secret("GITHUB_DATA_REPO")
+    branch = secret("GITHUB_DATA_BRANCH", "main")
+    for key in uploaded_months:
+        path = f"months/{key}.zip"
+        archive = monthly_archive(incoming, raw, filename, key)
+        _, sha = github_content(path)
+        body = {
+            "message": f"{key} 자금현황 저장",
+            "content": base64.b64encode(archive).decode("ascii"),
+            "branch": branch,
+        }
+        if sha:
+            body["sha"] = sha
+        github_request("PUT", f"/repos/{repo}/contents/{path}", json=body)
+    load_remote_sheets.clear()
+    return list(SYNC_SHEETS), uploaded_months
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFrame]:
+    del token_fingerprint
+    response = requests.get(
+        f"{GITHUB_API}/repos/{repo}/contents/months",
+        headers=github_headers(),
+        timeout=30,
+    )
+    if response.status_code == 404:
+        return {}
+    if response.status_code >= 400:
+        detail = response.json().get("message", response.text)
+        raise RuntimeError(f"비공개 저장소 읽기 오류 ({response.status_code}): {detail}")
+    items = response.json()
+    grouped: dict[str, list[pd.DataFrame]] = {}
+    for item in sorted(items, key=lambda x: x["name"]):
+        if item.get("type") != "file" or not item["name"].endswith(".zip"):
+            continue
+        raw, _ = github_content(item["path"])
+        if not raw:
+            continue
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            for name in archive.namelist():
+                if not name.startswith("sheets/") or not name.endswith(".json"):
+                    continue
+                sheet_name = Path(name).stem
+                frame = pd.read_json(io.StringIO(archive.read(name).decode("utf-8")), orient="table")
+                grouped.setdefault(sheet_name, []).append(frame)
+    result: dict[str, pd.DataFrame] = {}
+    for name, frames in grouped.items():
+        columns = list(dict.fromkeys(col for frame in frames for col in frame.columns))
+        result[name] = pd.concat([f.reindex(columns=columns) for f in frames], ignore_index=True)
+    return result
+
+
+def load_saved_sheets() -> dict[str, pd.DataFrame]:
+    if remote_storage_ready():
+        token_hash = hashlib.sha256(secret("GITHUB_TOKEN").encode()).hexdigest()[:12]
+        return load_remote_sheets(secret("GITHUB_DATA_REPO"), token_hash)
+    return load_local_sheets()
+
+
+def load_local_sheets() -> dict[str, pd.DataFrame]:
+    init_storage()
+    grouped: dict[str, list[pd.DataFrame]] = {}
+    with sqlite3.connect(DB_PATH) as con:
+        rows = con.execute("SELECT sheet_name, data_json FROM monthly_sheets ORDER BY month_key").fetchall()
+    for name, payload in rows:
+        grouped.setdefault(name, []).append(pd.read_json(io.StringIO(payload), orient="table"))
+    result = {}
+    for name, frames in grouped.items():
+        columns = list(dict.fromkeys(col for frame in frames for col in frame.columns))
+        result[name] = pd.concat([f.reindex(columns=columns) for f in frames], ignore_index=True)
+    return result
+
+
+def backup_zip() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if DB_PATH.exists(): archive.write(DB_PATH, "fund_data.db")
+        for path in UPLOAD_DIR.glob("*"):
+            if path.is_file(): archive.write(path, f"uploads/{path.name}")
+    return buffer.getvalue()
+
+
+def restore_backup(raw: bytes) -> None:
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        names = set(archive.namelist())
+        if "fund_data.db" not in names:
+            raise ValueError("올바른 대시보드 백업 파일이 아닙니다.")
+        DB_PATH.write_bytes(archive.read("fund_data.db"))
+        for name in names:
+            if name.startswith("uploads/") and not name.endswith("/"):
+                target = UPLOAD_DIR / Path(name).name
+                target.write_bytes(archive.read(name))
 
 
 @st.cache_data(show_spinner=False)
@@ -384,7 +526,9 @@ def html_money_table(df: pd.DataFrame, show_share: bool = False) -> str:
         extra = f"<td>{share:.1%}</td>" if show_share else ""
         rows.append(f"<tr><td>{escape(str(row['항목']))}</td><td>{row['금액']:,.0f}</td>{extra}</tr>")
     colspan = 3 if show_share else 2
-    return (f'<table class="simple-table"><thead><tr>{heads}</tr></thead><tbody>{"".join(rows)}</tbody>'
+    cols = ('<colgroup><col class="col-item"><col class="col-money">'
+            + ('<col class="col-share">' if show_share else '') + '</colgroup>')
+    return (f'<table class="simple-table">{cols}<thead><tr>{heads}</tr></thead><tbody>{"".join(rows)}</tbody>'
             f'<tfoot><tr><td>합계</td><td colspan="{colspan-1}">{total:,.0f}</td></tr></tfoot></table>')
 
 
@@ -394,38 +538,59 @@ def kpi_card(title: str, value: float, color: str, bg: str) -> str:
             f'<div class="kpi-sub">{value:,.0f} 원</div></div>')
 
 
+upload_password = secret("UPLOAD_PASSWORD")
+if "uploader_authorized" not in st.session_state:
+    st.session_state.uploader_authorized = False
+
 with st.sidebar:
     st.markdown("## 🌿 자금현황")
-    st.caption("Google Sheets에 월별 자료를 누적하고 언제든 과거 자료를 조회합니다.")
-    uploaded = st.file_uploader("엑셀 파일 선택", type=["xlsx", "xls"], help="기존 양식 그대로 올려주세요.")
-    save_clicked = st.button(
-        "Google Sheets에 저장",
-        type="primary",
-        use_container_width=True,
-        disabled=uploaded is None or not google_configured(),
-    )
-    if google_configured():
-        st.success("Google Sheets 연결됨")
-    else:
-        st.warning("Google Sheets 쓰기 설정 필요")
+    if upload_password and not st.session_state.uploader_authorized:
+        st.caption("자료 업로드는 담당자만 가능합니다. 다른 직원은 바로 조회할 수 있습니다.")
+        entered_password = st.text_input("업로드 담당자 비밀번호", type="password")
+        if st.button("업로드 모드 열기", use_container_width=True):
+            if hmac.compare_digest(entered_password, upload_password):
+                st.session_state.uploader_authorized = True
+                st.rerun()
+            else:
+                st.error("비밀번호가 맞지 않습니다.")
+    elif upload_password and st.session_state.uploader_authorized:
+        st.success("업로드 담당자 모드")
+        if st.button("업로드 모드 닫기", use_container_width=True):
+            st.session_state.uploader_authorized = False
+            st.rerun()
+
+    can_upload = st.session_state.uploader_authorized or not upload_password
+    uploaded = None
+    save_clicked = False
+    if can_upload:
+        uploaded = st.file_uploader("엑셀 파일 선택", type=["xlsx", "xls"], help="기존 양식 그대로 올려주세요.")
+        save_clicked = st.button(
+            "월별 자료 저장하기",
+            type="primary",
+            use_container_width=True,
+            disabled=uploaded is None,
+        )
+        if remote_storage_ready():
+            st.caption("새 기준월은 추가되고, 같은 기준월은 최신 파일로 교체됩니다.")
+        else:
+            st.warning("현재 영구 저장 연결 전입니다. 업로드한 파일은 미리보기만 가능합니다.")
     st.markdown("---")
-    st.markdown("**사용 방법**")
-    st.markdown("① 엑셀 업로드  \n② 저장 버튼 클릭  \n③ 기준월 선택")
-    st.caption("같은 기준월을 다시 저장하면 해당 월 자료만 최신 내용으로 교체됩니다.")
+    st.markdown("**조회 방법**")
+    st.markdown("① 기준월 선택  \n② 자금현황·자동분석 확인")
 
 try:
     uploaded_sheets = load_workbook(uploaded.getvalue()) if uploaded else None
     if save_clicked and uploaded_sheets is not None:
-        saved_names, saved_months = save_workbook_to_google(uploaded_sheets)
+        if not remote_storage_ready():
+            raise ValueError("영구 저장소가 아직 연결되지 않았습니다.")
+        saved_names, saved_months = save_workbook_remote(uploaded_sheets, uploaded.getvalue(), uploaded.name)
         st.sidebar.success(
             f"저장 완료: {', '.join(sorted(saved_months))}\n\n"
-            f"{len(saved_names)}개 시트가 갱신됐습니다."
+            "같은 달 자료가 있으면 최신 내용으로 교체했습니다."
         )
-
-    if google_configured():
-        with st.spinner("Google Sheets 누적 자료를 불러오는 중입니다..."):
-            sheets = load_google_sheets(spreadsheet_id())
-        data_source = "Google Sheets 누적 자료"
+    sheets = load_saved_sheets()
+    if sheets:
+        data_source = "공유 누적자료"
     elif uploaded_sheets is not None:
         sheets = uploaded_sheets
         data_source = "업로드 미리보기 · 아직 저장되지 않음"
@@ -433,9 +598,9 @@ try:
         st.markdown(
             """
             <div class="hero"><h1>한살림생산자연합회 자금현황</h1>
-            <p>Google Sheets 누적 저장형 대시보드</p></div>
-            <div class="upload-welcome"><h2>Google Sheets 연결 설정이 필요합니다</h2>
-            <p>README의 연결 단계를 한 번만 완료하면, 이후 업로드 자료가 월별로 계속 누적됩니다.</p></div>
+            <p>월별 누적·공유 대시보드</p></div>
+            <div class="upload-welcome"><h2>아직 저장된 기준월이 없습니다</h2>
+            <p>업로드 담당자가 왼쪽에서 엑셀을 선택하고 ‘월별 자료 저장하기’를 누르면 대시보드가 열립니다.</p></div>
             """,
             unsafe_allow_html=True,
         )
@@ -477,7 +642,7 @@ try:
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
 
-    top_left, top_right = st.columns([1, 1], gap="small")
+    top_left, top_right = st.columns([1.02, 1.28], gap="small")
     with top_left:
         section("자금 흐름 구조")
         flow = filter_month(sheets[SHEET_FLOW], selected)
@@ -505,7 +670,7 @@ try:
         if deposits.empty:
             empty_state("보통예금 상세 항목을 인식하지 못했습니다. 아래 ‘검산·원본’ 화면에서 입력 시트의 열 이름을 확인해 주세요.")
         else:
-            chart_col, table_col = st.columns([.95, 1.2], gap="small")
+            chart_col, table_col = st.columns([.78, 1.32], gap="small")
             with chart_col:
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
@@ -517,15 +682,15 @@ try:
                 fig.update_layout(**plot_layout(330), showlegend=False)
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
             with table_col:
-                st.markdown(html_money_table(deposits, True), unsafe_allow_html=True)
+                st.markdown(f'<div class="table-frame">{html_money_table(deposits, True)}</div>', unsafe_allow_html=True)
 
-    lower1, lower2, lower3 = st.columns([1, 1, 1], gap="small")
+    lower1, lower2, lower3 = st.columns([1.05, 1.05, 1.30], gap="small")
     with lower1:
         section("미수금 세부내역")
         if receivables.empty:
             empty_state("미수금 상세 항목을 인식하지 못했습니다. 입력 시트에 ‘구분·항목·금액’ 열이 있는지 확인해 주세요.")
         else:
-            st.markdown(html_money_table(receivables), unsafe_allow_html=True)
+            st.markdown(f'<div class="table-frame compact">{html_money_table(receivables)}</div>', unsafe_allow_html=True)
 
     with lower2:
         section("용도제한자금 구성")
@@ -533,7 +698,7 @@ try:
             empty_state("용도제한자금 상세 항목을 인식하지 못했습니다. 입력 시트의 분류명이 ‘용도제한자금’인지 확인해 주세요.")
         else:
             ordered = limits.sort_values("금액", ascending=False)
-            st.markdown(html_money_table(ordered), unsafe_allow_html=True)
+            st.markdown(f'<div class="table-frame compact">{html_money_table(ordered)}</div>', unsafe_allow_html=True)
 
     with lower3:
         st.markdown('<div class="section" style="background:#C51D22">주요 포인트 · 자동 분석</div>', unsafe_allow_html=True)
@@ -548,4 +713,4 @@ try:
 
 except Exception as exc:
     st.error(f"자료를 읽거나 저장하는 중 문제가 발생했습니다: {exc}")
-    st.info("Google Sheets 공유 권한, 서비스 계정 설정, 엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요.")
+    st.info("엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요. 문제가 계속되면 오류 화면을 보내주세요.")
