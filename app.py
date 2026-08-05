@@ -694,7 +694,9 @@ try:
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        fig_flow.update_layout(**plot_layout(350), showlegend=False, margin=dict(l=16, r=16, t=42, b=72))
+        flow_layout = plot_layout(350)
+        flow_layout["margin"] = dict(l=16, r=16, t=42, b=72)
+        fig_flow.update_layout(**flow_layout, showlegend=False)
         fig_flow.update_xaxes(
             tickfont=dict(size=13, color="#000000"), title=None,
             tickangle=0, automargin=True,
