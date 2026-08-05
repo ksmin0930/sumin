@@ -116,7 +116,19 @@ def find_col(df: pd.DataFrame, names: Iterable[str], required: bool = True) -> s
 def clean_frame(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(how="all").copy()
     df.columns = [str(c).strip() for c in df.columns]
-    return df.loc[:, ~df.columns.str.startswith("Unnamed")]
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+    # 엑셀 양식에 같은 제목의 열이 반복되어도 저장·복원 단계가 멈추지 않게 한다.
+    return df.loc[:, ~df.columns.duplicated()].copy()
+
+
+def frame_from_table_json(raw: bytes) -> pd.DataFrame:
+    """pandas table 스키마보다 실제 레코드를 우선해 월별 자료를 안전하게 복원한다."""
+    payload = json.loads(raw.decode("utf-8"))
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        frame = pd.DataFrame(payload["data"])
+        frame = frame.drop(columns=["index"], errors="ignore")
+        return clean_frame(frame)
+    return clean_frame(pd.read_json(io.StringIO(raw.decode("utf-8")), orient="table"))
 
 
 def init_storage() -> None:
@@ -303,7 +315,7 @@ def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFr
                 if not name.startswith("sheets/") or not name.endswith(".json"):
                     continue
                 sheet_name = Path(name).stem
-                frame = pd.read_json(io.StringIO(archive.read(name).decode("utf-8")), orient="table")
+                frame = frame_from_table_json(archive.read(name))
                 grouped.setdefault(sheet_name, []).append(frame)
     result: dict[str, pd.DataFrame] = {}
     for name, frames in grouped.items():
