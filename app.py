@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 import zipfile
+import traceback
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -733,3 +734,4 @@ try:
 except Exception as exc:
     st.error(f"자료를 읽거나 저장하는 중 문제가 발생했습니다: {exc}")
     st.info("엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요. 문제가 계속되면 오류 화면을 보내주세요.")
+    st.code(traceback.format_exc(), language="text")
