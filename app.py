@@ -82,7 +82,7 @@ st.markdown(
     .simple-table td{padding:.38rem .48rem;border-bottom:1px solid #ECEDEF;text-align:right;white-space:nowrap}.simple-table td:first-child{text-align:left;white-space:normal;overflow-wrap:anywhere}
     .simple-table tfoot td{font-weight:900;border-top:2px solid #C9CDD3;border-bottom:0}
     .simple-table .col-item{width:auto}.simple-table .col-money{width:42%}.simple-table .col-share{width:22%}
-    .table-frame{min-height:330px;background:#fff;border:1px solid #E1E4E8;border-radius:4px;overflow:hidden}
+    .table-frame{min-height:350px;background:#fff;border:1px solid #E1E4E8;border-radius:4px;overflow:hidden}
     .table-frame.compact{min-height:255px}
     @media(max-width:1000px){.kpi-grid{grid-template-columns:1fr}.op{height:18px;line-height:18px}.block-container{padding:.6rem}}
     .empty {background:#F9FBFA; border:1px dashed #9BB1A4; border-radius:14px; padding:1.35rem; color:#566A5F; font-size:1rem;}
@@ -642,7 +642,8 @@ try:
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
 
-    top_left, top_right = st.columns([1.02, 1.28], gap="small")
+    # 두 핵심 영역을 같은 비중으로 두고, 차트 높이도 통일해 한 줄의 균형을 맞춘다.
+    top_left, top_right = st.columns([1, 1], gap="small")
     with top_left:
         section("자금 흐름 구조")
         flow = filter_month(sheets[SHEET_FLOW], selected)
@@ -661,7 +662,7 @@ try:
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        fig_flow.update_layout(**plot_layout(330), showlegend=False)
+        fig_flow.update_layout(**plot_layout(350), showlegend=False)
         fig_flow.update_yaxes(tickformat="~s", gridcolor="#E9EEE9", title=None)
         st.plotly_chart(fig_flow, use_container_width=True, config={"displayModeBar": False})
 
@@ -670,21 +671,27 @@ try:
         if deposits.empty:
             empty_state("보통예금 상세 항목을 인식하지 못했습니다. 아래 ‘검산·원본’ 화면에서 입력 시트의 열 이름을 확인해 주세요.")
         else:
-            chart_col, table_col = st.columns([.78, 1.32], gap="small")
+            # 도넛이 표에 눌려 작아 보이지 않도록 그래프와 표를 거의 반반 배치한다.
+            chart_col, table_col = st.columns([1, 1.12], gap="small")
             with chart_col:
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
                     marker=dict(colors=[GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]),
-                    textinfo="label+percent", textfont=dict(size=15),
+                    textinfo="label+percent", textposition="auto", textfont=dict(size=14),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=17, color=INK))
-                fig.update_layout(**plot_layout(330), showlegend=False)
+                fig.update_layout(
+                    **plot_layout(350),
+                    showlegend=False,
+                    uniformtext_minsize=12,
+                    uniformtext_mode="hide",
+                )
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
             with table_col:
                 st.markdown(f'<div class="table-frame">{html_money_table(deposits, True)}</div>', unsafe_allow_html=True)
 
-    lower1, lower2, lower3 = st.columns([1.05, 1.05, 1.30], gap="small")
+    lower1, lower2, lower3 = st.columns([1, 1, 1.22], gap="small")
     with lower1:
         section("미수금 세부내역")
         if receivables.empty:
