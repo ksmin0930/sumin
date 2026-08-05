@@ -682,7 +682,8 @@ try:
         section("자금 흐름 구조")
         # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
         # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
-        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
+        # 좁은 화면에서도 항목명이 비스듬해지지 않도록 긴 이름은 두 줄로 고정한다.
+        flow_labels = ["총<br>유동자산", "유동부채<br>차감", "순자금", "용도제한자금<br>차감", "운영가능자금"]
         flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
         measures = ["absolute", "relative", "total", "relative", "total"]
         fig_flow = go.Figure(go.Waterfall(
@@ -693,8 +694,11 @@ try:
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        fig_flow.update_layout(**plot_layout(350), showlegend=False)
-        fig_flow.update_xaxes(tickfont=dict(size=13, color="#000000"), title=None)
+        fig_flow.update_layout(**plot_layout(350), showlegend=False, margin=dict(l=16, r=16, t=42, b=72))
+        fig_flow.update_xaxes(
+            tickfont=dict(size=13, color="#000000"), title=None,
+            tickangle=0, automargin=True,
+        )
         fig_flow.update_yaxes(
             tickformat="~s", gridcolor="#E9EEE9", title=None,
             tickfont=dict(size=12, color="#000000"),
