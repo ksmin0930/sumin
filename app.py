@@ -8,7 +8,6 @@ import json
 import re
 import sqlite3
 import zipfile
-import traceback
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -433,10 +432,13 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
     amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
     if not item_col or not amount_col:
         return pd.DataFrame(columns=["항목", "금액"])
+    result = pd.DataFrame({
+        "항목": df[item_col].fillna("미분류").astype(str).to_numpy(),
+        "금액": df[amount_col].map(money).to_numpy(),
+    })
     if kind_col:
         mask = df[kind_col].astype(str).map(norm).apply(lambda x: any(norm(k) in x for k in keywords))
-        df = df[mask]
-    result = pd.DataFrame({"항목": df[item_col].fillna("미분류").astype(str), "금액": df[amount_col].map(money)})
+        result = result.loc[mask.to_numpy()].copy()
     result = result[result["금액"] != 0]
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
@@ -734,4 +736,3 @@ try:
 except Exception as exc:
     st.error(f"자료를 읽거나 저장하는 중 문제가 발생했습니다: {exc}")
     st.info("엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요. 문제가 계속되면 오류 화면을 보내주세요.")
-    st.code(traceback.format_exc(), language="text")
