@@ -456,15 +456,21 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
     if source.empty:
         return pd.DataFrame(columns=["항목", "금액"])
     df = filter_month(source, selected)
-    kind_col = find_col(df, ["구분", "대분류", "자금구분", "분류", "유동자산구분"], required=False)
+    category_columns = [
+        column for column in df.columns
+        if norm(column) in {norm(name) for name in ["대분류", "자금구분", "분류", "유동자산구분", "구분"]}
+    ]
     item_col = find_col(df, ["항목", "세부항목", "계정명", "내역", "예금명", "세부내역"], required=False)
     amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
     if df.empty or not item_col or not amount_col:
         return pd.DataFrame(columns=["항목", "금액"])
 
     normalized_keywords = [norm(keyword) for keyword in keywords]
-    if kind_col:
-        labels = df[kind_col].fillna("").astype(str).map(norm)
+    if category_columns:
+        # '대분류=보통예금, 구분=1'처럼 분류 열이 여러 개여도 모두 확인한다.
+        labels = df[category_columns].fillna("").astype(str).apply(
+            lambda row: " ".join(norm(value) for value in row), axis=1
+        )
         mask = labels.apply(lambda label: any(keyword in label for keyword in normalized_keywords))
     else:
         # 분류 열이 없는 입력양식도 전체 행에서 항목명을 찾아 세부 그래프를 유지한다.
