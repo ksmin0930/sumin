@@ -380,32 +380,34 @@ def month_label(value: object) -> str:
         return parsed.strftime("%Y년 %m월")
     match = re.search(r"(20\d{2})\D*(\d{1,2})", str(value))
     return f"{match.group(1)}년 {int(match.group(2)):02d}월" if match else str(value)
-426
-def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) -> pd.DataFrame:
-    if source.empty:
-        return pd.DataFrame(columns=["항목", "금액"])
-    df = filter_month(source, selected)
-    kind_col = find_col(df, ["구분", "대분류", "자금구분", "분류", "유동자산구분"], required=False)
-    item_col = find_col(df, ["항목", "세부항목", "계정명", "내역", "예금명", "세부내역"], required=False)
-    amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
-    if not item_col or not amount_col:
-        return pd.DataFrame(columns=["항목", "금액"])
-    result = pd.DataFrame({
-        "항목": df[item_col].fillna("미분류").astype(str).to_numpy(),
-        "금액": df[amount_col].map(money).to_numpy(),
-    })
-    mask = pd.Series(False, index=df.index)
-    if kind_col:
-        mask = df[kind_col].fillna("").astype(str).map(norm).apply(
-            lambda value: any(norm(keyword) in value for keyword in keywords)
-        )
-    if not mask.any():
-        row_text = df.fillna("").astype(str).agg(" ".join, axis=1).map(norm)
-        mask = row_text.apply(lambda value: any(norm(keyword) in value for keyword in keywords))
-    result = result.loc[mask.to_numpy()].copy()
-    result = result[result["금액"] != 0]
-    return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
+
+def money(value: object) -> float:
+    if pd.isna(value):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = re.sub(r"[^0-9.\-]", "", str(value))
+    return float(text) if text not in {"", "-", "."} else 0.0
+
+
+def won(value: float, compact: bool = True) -> str:
+    sign = "-" if value < 0 else ""
+    value = abs(value)
+    if compact and value >= 100_000_000:
+        return f"{sign}{value / 100_000_000:,.2f}억 원"
+    if compact and value >= 10_000:
+        return f"{sign}{value / 10_000:,.0f}만 원"
+    return f"{sign}{value:,.0f}원"
+
+
+def pick_metric(row: pd.Series, aliases: list[str]) -> float:
+    mapped = {norm(c): c for c in row.index}
+    for alias in aliases:
+        if norm(alias) in mapped:
+            return money(row[mapped[norm(alias)]])
+    for alias in aliases:
+        for normalized, original in mapped.items():
             if norm(alias) in normalized:
                 return money(row[original])
     return 0.0
@@ -434,9 +436,19 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
         "항목": df[item_col].fillna("미분류").astype(str).to_numpy(),
         "금액": df[amount_col].map(money).to_numpy(),
     })
+    # 구분 열이 없거나 값이 비어 있는 양식에서도, 행 전체에 포함된
+    # '보통예금'·'미수금' 표기를 기준으로 상세내역을 찾아 표시한다.
+    mask = pd.Series(False, index=df.index)
     if kind_col:
-        mask = df[kind_col].astype(str).map(norm).apply(lambda x: any(norm(k) in x for k in keywords))
-        result = result.loc[mask.to_numpy()].copy()
+        mask = df[kind_col].fillna("").astype(str).map(norm).apply(
+            lambda value: any(norm(keyword) in value for keyword in keywords)
+        )
+    if not mask.any():
+        row_text = df.fillna("").astype(str).agg(" ".join, axis=1).map(norm)
+        mask = row_text.apply(
+            lambda value: any(norm(keyword) in value for keyword in keywords)
+        )
+    result = result.loc[mask.to_numpy()].copy()
     result = result[result["금액"] != 0]
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
