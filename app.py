@@ -553,26 +553,67 @@ def flagged_fund_amount(source: pd.DataFrame, selected: object, flag_name: str) 
     return float(df.loc[flags.eq("Y"), amount_col].map(money).sum())
 
 
+OPERATING_RESTRICTED_DEPOSITS = ("청년육성적립금", "생산안정적립금", "농업살림기금")
+
+
+def category_amount(source: pd.DataFrame, selected: object, keywords: list[str]) -> float | None:
+    """선택월의 특정 대분류 금액을 합산한다. 입력 양식이 없으면 None을 반환한다."""
+    if source.empty:
+        return None
+    df = filter_month(source, selected)
+    amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
+    category_columns = [
+        column for column in df.columns
+        if norm(column) in {norm(name) for name in ["대분류", "자금구분", "분류", "유동자산구분", "구분"]}
+    ]
+    if df.empty or not amount_col or not category_columns:
+        return None
+    labels = df[category_columns].fillna("").astype(str).apply(
+        lambda row: " ".join(norm(value) for value in row), axis=1
+    )
+    wanted = [norm(keyword) for keyword in keywords]
+    return float(df.loc[labels.apply(lambda label: any(keyword in label for keyword in wanted)), amount_col].map(money).sum())
+
+
+def operating_restricted_deposit_amount(source: pd.DataFrame, selected: object) -> float | None:
+    """운영가능자금에서 제외할 보통예금의 지정 적립금만 합산한다."""
+    if source.empty:
+        return None
+    df = filter_month(source, selected)
+    category_col = find_col(df, ["대분류", "자금구분", "분류", "유동자산구분"], required=False)
+    item_col = find_col(df, ["항목", "세부항목", "계정명", "내역", "예금명", "세부내역"], required=False)
+    amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
+    if df.empty or not category_col or not item_col or not amount_col:
+        return None
+    is_deposit = df[category_col].fillna("").map(norm).eq(norm("보통예금"))
+    restricted_names = {norm(name) for name in OPERATING_RESTRICTED_DEPOSITS}
+    is_restricted = df[item_col].fillna("").map(norm).isin(restricted_names)
+    return float(df.loc[is_deposit & is_restricted, amount_col].map(money).sum())
+
+
 def dashboard_fund_metrics(
     source: pd.DataFrame,
     selected: object,
-    net_assets: float,
     summary_restricted: float,
     summary_available: float,
 ) -> tuple[float, float]:
-    """입력 양식의 두 관리 기준을 분리해 KPI에 반영한다.
+    """대시보드의 자금 정의를 입력 양식 기준으로 일관되게 계산한다.
 
-    - 용도제한자금: ``용도제한여부=Y`` 금액
-    - 운영가능자금: 순자금에서 ``운영가능차감여부=Y`` 금액을 뺀 금액
+    - 용도제한자금: ``용도제한여부=Y``인 모든 자금(정기예금 포함)
+    - 운영가능자금: 보통예금 - 청년육성·생산안정·농업살림기금 + 미수금
 
-    두 기준은 서로 다를 수 있다. 예를 들어 정기예금은 용도는 제한돼도 실제
-    운영에 사용할 수 있으면 각각 Y/N으로 입력할 수 있으므로, 요약시트의
-    고정값으로 한쪽을 다른 쪽에 맞춰 계산하면 안 된다.
+    정기예금은 총 유동자산 및 용도제한자금에는 포함되지만, 운영가능자금에는
+    포함하지 않는다. 이 계산은 운영가능차감여부의 Y/N과 별개인 관리 기준이다.
     """
     restricted = flagged_fund_amount(source, selected, "용도제한여부")
-    operational_deduction = flagged_fund_amount(source, selected, "운영가능차감여부")
+    ordinary_deposits = category_amount(source, selected, ["보통예금"])
+    receivables = category_amount(source, selected, ["미수금"])
+    operational_restricted = operating_restricted_deposit_amount(source, selected)
     shown_restricted = summary_restricted if restricted is None else restricted
-    shown_available = summary_available if operational_deduction is None else net_assets - operational_deduction
+    if any(value is None for value in (ordinary_deposits, receivables, operational_restricted)):
+        shown_available = summary_available
+    else:
+        shown_available = ordinary_deposits - operational_restricted + receivables
     return shown_restricted, shown_available
 
 
@@ -770,19 +811,28 @@ try:
     )
     selected = st.sidebar.selectbox("기준월", months, index=default_index, format_func=month_label)
     summary_row = filter_month(summary, selected).iloc[-1]
-    liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
-    liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
+    source = sheets.get(SHEET_INPUT, pd.DataFrame())
+    ordinary_deposits_amount = category_amount(source, selected, ["보통예금"])
+    time_deposits_amount = category_amount(source, selected, ["정기예금"])
+    receivables_amount = category_amount(source, selected, ["미수금"])
+    liquid_debt_amount = category_amount(source, selected, ["유동부채"])
+    # 총 유동자산은 보통예금·정기예금·미수금을 합산한다. 구 양식은 요약값을 유지한다.
+    if any(value is None for value in (ordinary_deposits_amount, time_deposits_amount, receivables_amount)):
+        liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
+    else:
+        liquid_assets = ordinary_deposits_amount + time_deposits_amount + receivables_amount
+    liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"]) if liquid_debt_amount is None else liquid_debt_amount
     net_assets = pick_metric(summary_row, ["순자금", "순자산", "순유동자산"]) or liquid_assets - liquid_debt
+    net_assets = liquid_assets - liquid_debt
     summary_restricted = pick_metric(summary_row, ["용도제한자금", "제한자금"])
     summary_available = pick_metric(summary_row, ["운영가능자금", "사용가능자금"]) or net_assets - summary_restricted
-    source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = display_deposit_labels(
         category_table(source, selected, ["보통예금"]), selected
     )
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
     restricted, available = dashboard_fund_metrics(
-        source, selected, net_assets, summary_restricted, summary_available
+        source, selected, summary_restricted, summary_available
     )
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
@@ -803,9 +853,11 @@ try:
         section("자금 흐름 구조")
         # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
         # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
-        operational_deduction = net_assets - available
-        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "운영가능 차감", "운영가능자금"]
-        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(operational_deduction), available]
+        operating_restriction = operating_restricted_deposit_amount(source, selected)
+        operating_restriction = 0 if operating_restriction is None else operating_restriction
+        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "보통예금 제한분", "운영가능자금"]
+        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(operating_restriction), available]
+        # 운영가능자금은 별도 정의(보통예금-제한분+미수금)이므로 독립 합계로 표시한다.
         measures = ["absolute", "relative", "total", "relative", "total"]
         fig_flow = go.Figure(go.Waterfall(
             measure=measures, x=flow_labels, y=flow_values,
