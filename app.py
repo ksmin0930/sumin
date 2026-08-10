@@ -311,17 +311,35 @@ def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFr
         if not raw:
             continue
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            archived_sheets: set[str] = set()
             for name in archive.namelist():
                 if not name.startswith("sheets/") or not name.endswith(".json"):
                     continue
                 sheet_name = Path(name).stem
                 frame = frame_from_table_json(archive.read(name))
                 grouped.setdefault(sheet_name, []).append(frame)
+                archived_sheets.add(sheet_name)
+            # 과거 저장본에 세부 입력 시트가 빠졌어도 원본 엑셀에서 복원해 그래프 공백을 막는다.
+            if SHEET_INPUT not in archived_sheets:
+                restored_input = restore_input_from_original(archive)
+                if restored_input is not None and not restored_input.empty:
+                    grouped.setdefault(SHEET_INPUT, []).append(restored_input)
     result: dict[str, pd.DataFrame] = {}
     for name, frames in grouped.items():
         columns = list(dict.fromkeys(col for frame in frames for col in frame.columns))
         result[name] = pd.concat([f.reindex(columns=columns) for f in frames], ignore_index=True)
     return result
+
+
+def restore_input_from_original(archive: zipfile.ZipFile) -> pd.DataFrame | None:
+    """이전 월별 파일에 입력 시트 JSON이 없으면 원본 엑셀에서 안전하게 복원한다."""
+    original = next((name for name in archive.namelist() if name.startswith("original/") and not name.endswith("/")), None)
+    if not original:
+        return None
+    try:
+        return load_workbook(archive.read(original)).get(SHEET_INPUT)
+    except Exception:
+        return None
 
 
 def load_saved_sheets() -> dict[str, pd.DataFrame]:
@@ -423,23 +441,46 @@ def filter_month(df: pd.DataFrame, selected: object) -> pd.DataFrame:
     return df[df[month_col].map(month_label) == month_label(selected)].copy()
 
 
+def has_actual_balance(summary: pd.DataFrame, selected: object) -> bool:
+    """0원 템플릿은 건너뛰고 실제 값이 있는 가장 최근 기준월을 기본으로 선택한다."""
+    rows = filter_month(summary, selected)
+    if rows.empty:
+        return False
+    row = rows.iloc[-1]
+    metrics = ["총유동자산", "유동자산", "총유동부채", "유동부채", "순자금", "운영가능자금"]
+    return any(abs(pick_metric(row, [metric])) > 0 for metric in metrics)
+
+
 def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) -> pd.DataFrame:
+    """열 이름·분류 위치가 조금 달라도 지정된 자금 항목만 안전하게 집계한다."""
     if source.empty:
         return pd.DataFrame(columns=["항목", "금액"])
     df = filter_month(source, selected)
     kind_col = find_col(df, ["구분", "대분류", "자금구분", "분류", "유동자산구분"], required=False)
     item_col = find_col(df, ["항목", "세부항목", "계정명", "내역", "예금명", "세부내역"], required=False)
     amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
-    if not item_col or not amount_col:
+    if df.empty or not item_col or not amount_col:
         return pd.DataFrame(columns=["항목", "금액"])
-    result = pd.DataFrame({
-        "항목": df[item_col].fillna("미분류").astype(str).to_numpy(),
-        "금액": df[amount_col].map(money).to_numpy(),
-    })
+
+    normalized_keywords = [norm(keyword) for keyword in keywords]
     if kind_col:
-        mask = df[kind_col].astype(str).map(norm).apply(lambda x: any(norm(k) in x for k in keywords))
-        result = result.loc[mask.to_numpy()].copy()
-    result = result[result["금액"] != 0]
+        labels = df[kind_col].fillna("").astype(str).map(norm)
+        mask = labels.apply(lambda label: any(keyword in label for keyword in normalized_keywords))
+    else:
+        # 분류 열이 없는 입력양식도 전체 행에서 항목명을 찾아 세부 그래프를 유지한다.
+        row_text = df.fillna("").astype(str).apply(
+            lambda row: " ".join(norm(value) for value in row), axis=1
+        )
+        mask = row_text.apply(lambda text: any(keyword in text for keyword in normalized_keywords))
+
+    result = pd.DataFrame({
+        "항목": df.loc[mask, item_col].fillna("미분류").astype(str).to_numpy(),
+        "금액": df.loc[mask, amount_col].map(money).to_numpy(),
+    })
+    # 도넛·표에는 양수 잔액만 표시해 음수 또는 빈 값 때문에 차트가 깨지지 않도록 한다.
+    result = result[result["금액"] > 0]
+    if result.empty:
+        return pd.DataFrame(columns=["항목", "금액"])
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
 
@@ -659,7 +700,11 @@ try:
     if not months:
         raise ValueError("월별요약 시트에 기준월 데이터가 없습니다.")
 
-    selected = st.sidebar.selectbox("기준월", months, index=len(months) - 1, format_func=month_label)
+    default_index = next(
+        (index for index in range(len(months) - 1, -1, -1) if has_actual_balance(summary, months[index])),
+        len(months) - 1,
+    )
+    selected = st.sidebar.selectbox("기준월", months, index=default_index, format_func=month_label)
     summary_row = filter_month(summary, selected).iloc[-1]
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
@@ -670,7 +715,7 @@ try:
     available_ratio = available / net_assets if net_assets else 0
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = display_deposit_labels(
-        category_table(source, selected, ["보통예금", "예금"]), selected
+        category_table(source, selected, ["보통예금"]), selected
     )
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
