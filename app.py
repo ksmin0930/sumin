@@ -536,6 +536,46 @@ def restricted_fund_table(source: pd.DataFrame, selected: object) -> pd.DataFram
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
 
 
+def flagged_fund_amount(source: pd.DataFrame, selected: object, flag_name: str) -> float | None:
+    """선택한 기준월의 Y/N 입력값을 카드 계산에 그대로 반영한다.
+
+    ``None``은 해당 열 자체가 없는 이전 양식인 경우다. 이 경우에만 월별요약의
+    기존 값을 사용해 과거 자료 화면이 갑자기 0원으로 바뀌는 것을 방지한다.
+    """
+    if source.empty:
+        return None
+    df = filter_month(source, selected)
+    flag_col = find_col(df, [flag_name], required=False)
+    amount_col = find_col(df, ["금액", "잔액", "당월금액", "합계", "금액(원)"], required=False)
+    if not flag_col or not amount_col:
+        return None
+    flags = df[flag_col].fillna("").astype(str).str.strip().str.upper()
+    return float(df.loc[flags.eq("Y"), amount_col].map(money).sum())
+
+
+def dashboard_fund_metrics(
+    source: pd.DataFrame,
+    selected: object,
+    net_assets: float,
+    summary_restricted: float,
+    summary_available: float,
+) -> tuple[float, float]:
+    """입력 양식의 두 관리 기준을 분리해 KPI에 반영한다.
+
+    - 용도제한자금: ``용도제한여부=Y`` 금액
+    - 운영가능자금: 순자금에서 ``운영가능차감여부=Y`` 금액을 뺀 금액
+
+    두 기준은 서로 다를 수 있다. 예를 들어 정기예금은 용도는 제한돼도 실제
+    운영에 사용할 수 있으면 각각 Y/N으로 입력할 수 있으므로, 요약시트의
+    고정값으로 한쪽을 다른 쪽에 맞춰 계산하면 안 된다.
+    """
+    restricted = flagged_fund_amount(source, selected, "용도제한여부")
+    operational_deduction = flagged_fund_amount(source, selected, "운영가능차감여부")
+    shown_restricted = summary_restricted if restricted is None else restricted
+    shown_available = summary_available if operational_deduction is None else net_assets - operational_deduction
+    return shown_restricted, shown_available
+
+
 def plot_layout(height: int = 390) -> dict:
     return dict(
         height=height, margin=dict(l=25, r=25, t=35, b=35),
@@ -733,16 +773,17 @@ try:
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
     net_assets = pick_metric(summary_row, ["순자금", "순자산", "순유동자산"]) or liquid_assets - liquid_debt
-    restricted = pick_metric(summary_row, ["용도제한자금", "제한자금"])
-    available = pick_metric(summary_row, ["운영가능자금", "사용가능자금"]) or net_assets - restricted
-    debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
-    available_ratio = available / net_assets if net_assets else 0
+    summary_restricted = pick_metric(summary_row, ["용도제한자금", "제한자금"])
+    summary_available = pick_metric(summary_row, ["운영가능자금", "사용가능자금"]) or net_assets - summary_restricted
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
     deposits = display_deposit_labels(
         category_table(source, selected, ["보통예금"]), selected
     )
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
+    restricted, available = dashboard_fund_metrics(
+        source, selected, net_assets, summary_restricted, summary_available
+    )
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
                 f'<p>{escape(month_label(selected))} 기준 · {escape(data_source)}</p></div>', unsafe_allow_html=True)
@@ -751,7 +792,7 @@ try:
         kpi_card("총 유동자산", liquid_assets, "#1E65C1", "#BFDDF8"), '<div class="op">−</div>',
         kpi_card("유동부채", liquid_debt, "#F04A23", "#F5C6BA"), '<div class="op">=</div>',
         kpi_card("순자금", net_assets, "#7B711A", "#D5EA27"), '<div class="op">−</div>',
-        kpi_card("용도제한자금", restricted, "#6E238F", "#DCC1E4"), '<div class="op">=</div>',
+        kpi_card("용도제한자금", restricted, "#6E238F", "#DCC1E4"), '<div class="op">·</div>',
         kpi_card("운영가능자금", available, "#328E3C", "#45AD4E")
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
@@ -762,8 +803,9 @@ try:
         section("자금 흐름 구조")
         # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
         # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
-        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
-        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
+        operational_deduction = net_assets - available
+        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "운영가능 차감", "운영가능자금"]
+        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(operational_deduction), available]
         measures = ["absolute", "relative", "total", "relative", "total"]
         fig_flow = go.Figure(go.Waterfall(
             measure=measures, x=flow_labels, y=flow_values,
