@@ -596,11 +596,13 @@ def dashboard_fund_metrics(
     selected: object,
     summary_restricted: float,
     summary_available: float,
+    liquid_debt: float = 0,
 ) -> tuple[float, float]:
     """대시보드의 자금 정의를 입력 양식 기준으로 일관되게 계산한다.
 
     - 용도제한자금: ``용도제한여부=Y``인 모든 자금(정기예금 포함)
-    - 운영가능자금: 보통예금 - 청년육성·생산안정·농업살림기금 + 미수금
+    - 운영가능자금: 보통예금 - 청년육성·생산안정·농업살림기금
+      + 미수금 - 유동부채
 
     정기예금은 총 유동자산 및 용도제한자금에는 포함되지만, 운영가능자금에는
     포함하지 않는다. 이 계산은 운영가능차감여부의 Y/N과 별개인 관리 기준이다.
@@ -613,7 +615,7 @@ def dashboard_fund_metrics(
     if any(value is None for value in (ordinary_deposits, receivables, operational_restricted)):
         shown_available = summary_available
     else:
-        shown_available = ordinary_deposits - operational_restricted + receivables
+        shown_available = ordinary_deposits - operational_restricted + receivables - liquid_debt
     return shown_restricted, shown_available
 
 
@@ -832,7 +834,7 @@ try:
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
     restricted, available = dashboard_fund_metrics(
-        source, selected, summary_restricted, summary_available
+        source, selected, summary_restricted, summary_available, liquid_debt
     )
 
     st.markdown(f'<div class="hero"><h1>한살림생산자연합회 자금현황 요약</h1>'
@@ -842,7 +844,7 @@ try:
         kpi_card("총 유동자산", liquid_assets, "#1E65C1", "#BFDDF8"), '<div class="op">−</div>',
         kpi_card("유동부채", liquid_debt, "#F04A23", "#F5C6BA"), '<div class="op">=</div>',
         kpi_card("순자금", net_assets, "#7B711A", "#D5EA27"), '<div class="op">−</div>',
-        kpi_card("용도제한자금", restricted, "#6E238F", "#DCC1E4"), '<div class="op">·</div>',
+        kpi_card("용도제한자금", restricted, "#6E238F", "#DCC1E4"), '<div class="op">=</div>',
         kpi_card("운영가능자금", available, "#328E3C", "#45AD4E")
     ]
     st.markdown('<div class="kpi-grid">'+''.join(kpis)+'</div>', unsafe_allow_html=True)
@@ -853,11 +855,10 @@ try:
         section("자금 흐름 구조")
         # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
         # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
-        operating_restriction = operating_restricted_deposit_amount(source, selected)
-        operating_restriction = 0 if operating_restriction is None else operating_restriction
-        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "보통예금 제한분", "운영가능자금"]
-        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(operating_restriction), available]
-        # 운영가능자금은 별도 정의(보통예금-제한분+미수금)이므로 독립 합계로 표시한다.
+        # 운영가능자금은 순자금에서 용도제한자금을 차감한 금액으로 표시한다.
+        # 유동부채는 앞 단계에서 이미 차감되어, 카드와 흐름도가 같은 식으로 이어진다.
+        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금", "운영가능자금"]
+        flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
         measures = ["absolute", "relative", "total", "relative", "total"]
         fig_flow = go.Figure(go.Waterfall(
             measure=measures, x=flow_labels, y=flow_values,
