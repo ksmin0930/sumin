@@ -436,21 +436,20 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
         "항목": df[item_col].fillna("미분류").astype(str).to_numpy(),
         "금액": df[amount_col].map(money).to_numpy(),
     })
-    # 구분 열이 없거나 값이 비어 있는 양식에서도, 행 전체에 포함된
-    # '보통예금'·'미수금' 표기를 기준으로 상세내역을 찾아 표시한다.
-    mask = pd.Series(False, index=df.index)
     if kind_col:
-        mask = df[kind_col].fillna("").astype(str).map(norm).apply(
-            lambda value: any(norm(keyword) in value for keyword in keywords)
-        )
-    if not mask.any():
-        row_text = df.fillna("").astype(str).agg(" ".join, axis=1).map(norm)
-        mask = row_text.apply(
-            lambda value: any(norm(keyword) in value for keyword in keywords)
-        )
-    result = result.loc[mask.to_numpy()].copy()
+        mask = df[kind_col].astype(str).map(norm).apply(lambda x: any(norm(k) in x for k in keywords))
+        result = result.loc[mask.to_numpy()].copy()
     result = result[result["금액"] != 0]
     return result.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
+
+
+def display_deposit_labels(deposits: pd.DataFrame, selected: object) -> pd.DataFrame:
+    """6월부터 변경된 작목기금 명칭을 보통예금 구성에 일관되게 표시한다."""
+    shown = deposits.copy()
+    if month_key(selected) >= "2026-06":
+        shown["항목"] = shown["항목"].replace({"연수원수입": "작목기금"})
+        shown = shown.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
+    return shown
 
 
 def restricted_fund_table(source: pd.DataFrame, selected: object) -> pd.DataFrame:
@@ -660,20 +659,7 @@ try:
     if not months:
         raise ValueError("월별요약 시트에 기준월 데이터가 없습니다.")
 
-    # 미래 월의 미입력 템플릿(0원)이 기본으로 선택되면 상세표가 빈 것처럼 보일 수 있다.
-    # 실제 값이 있는 가장 최근 월을 우선 표시하고, 모든 월이 0원이면 최신 월을 유지한다.
-    nonzero_months = []
-    for month in months:
-        row = filter_month(summary, month).iloc[-1]
-        if any(
-            pick_metric(row, aliases) != 0
-            for aliases in (("총유동자산", "유동자산"), ("미수금",), ("보통예금",))
-        ):
-            nonzero_months.append(month)
-    default_month = nonzero_months[-1] if nonzero_months else months[-1]
-    selected = st.sidebar.selectbox(
-        "기준월", months, index=months.index(default_month), format_func=month_label
-    )
+    selected = st.sidebar.selectbox("기준월", months, index=len(months) - 1, format_func=month_label)
     summary_row = filter_month(summary, selected).iloc[-1]
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
@@ -683,7 +669,9 @@ try:
     debt_ratio = liquid_debt / liquid_assets if liquid_assets else 0
     available_ratio = available / net_assets if net_assets else 0
     source = sheets.get(SHEET_INPUT, pd.DataFrame())
-    deposits = category_table(source, selected, ["보통예금", "예금"])
+    deposits = display_deposit_labels(
+        category_table(source, selected, ["보통예금", "예금"]), selected
+    )
     limits = restricted_fund_table(source, selected)
     receivables = category_table(source, selected, ["미수금"])
 
@@ -705,8 +693,7 @@ try:
         section("자금 흐름 구조")
         # 합계 막대(순자금·운영가능자금)가 증감값으로 중복 계산되지 않도록
         # KPI와 동일한 값과 Waterfall 측정 유형을 명시한다.
-        # 좁은 화면에서도 항목명이 비스듬해지지 않도록 긴 이름은 두 줄로 고정한다.
-        flow_labels = ["총<br>유동자산", "유동부채<br>차감", "순자금", "용도제한자금<br>차감", "운영가능자금"]
+        flow_labels = ["총 유동자산", "유동부채 차감", "순자금", "용도제한자금 차감", "운영가능자금"]
         flow_values = [liquid_assets, -abs(liquid_debt), net_assets, -abs(restricted), available]
         measures = ["absolute", "relative", "total", "relative", "total"]
         fig_flow = go.Figure(go.Waterfall(
@@ -717,13 +704,8 @@ try:
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
         ))
-        flow_layout = plot_layout(350)
-        flow_layout["margin"] = dict(l=16, r=16, t=42, b=72)
-        fig_flow.update_layout(**flow_layout, showlegend=False)
-        fig_flow.update_xaxes(
-            tickfont=dict(size=13, color="#000000"), title=None,
-            tickangle=0, automargin=True,
-        )
+        fig_flow.update_layout(**plot_layout(350), showlegend=False)
+        fig_flow.update_xaxes(tickfont=dict(size=13, color="#000000"), title=None)
         fig_flow.update_yaxes(
             tickformat="~s", gridcolor="#E9EEE9", title=None,
             tickfont=dict(size=12, color="#000000"),
@@ -785,4 +767,3 @@ try:
 except Exception as exc:
     st.error(f"자료를 읽거나 저장하는 중 문제가 발생했습니다: {exc}")
     st.info("엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요. 문제가 계속되면 오류 화면을 보내주세요.")
-
