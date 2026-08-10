@@ -660,7 +660,20 @@ try:
     if not months:
         raise ValueError("월별요약 시트에 기준월 데이터가 없습니다.")
 
-    selected = st.sidebar.selectbox("기준월", months, index=len(months) - 1, format_func=month_label)
+    # 미래 월의 미입력 템플릿(0원)이 기본으로 선택되면 상세표가 빈 것처럼 보일 수 있다.
+    # 실제 값이 있는 가장 최근 월을 우선 표시하고, 모든 월이 0원이면 최신 월을 유지한다.
+    nonzero_months = []
+    for month in months:
+        row = filter_month(summary, month).iloc[-1]
+        if any(
+            pick_metric(row, aliases) != 0
+            for aliases in (("총유동자산", "유동자산"), ("미수금",), ("보통예금",))
+        ):
+            nonzero_months.append(month)
+    default_month = nonzero_months[-1] if nonzero_months else months[-1]
+    selected = st.sidebar.selectbox(
+        "기준월", months, index=months.index(default_month), format_func=month_label
+    )
     summary_row = filter_month(summary, selected).iloc[-1]
     liquid_assets = pick_metric(summary_row, ["총유동자산", "유동자산"])
     liquid_debt = pick_metric(summary_row, ["총유동부채", "유동부채"])
@@ -772,3 +785,4 @@ try:
 except Exception as exc:
     st.error(f"자료를 읽거나 저장하는 중 문제가 발생했습니다: {exc}")
     st.info("엑셀 시트명과 첫 번째 헤더 행을 확인해 주세요. 문제가 계속되면 오류 화면을 보내주세요.")
+
