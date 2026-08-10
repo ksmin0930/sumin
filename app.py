@@ -307,6 +307,7 @@ def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFr
     for item in sorted(items, key=lambda x: x["name"]):
         if item.get("type") != "file" or not item["name"].endswith(".zip"):
             continue
+        archive_key = Path(item["name"]).stem
         raw, _ = github_content(item["path"])
         if not raw:
             continue
@@ -317,11 +318,17 @@ def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFr
                     continue
                 sheet_name = Path(name).stem
                 frame = frame_from_table_json(archive.read(name))
+                # 월말 잔고 입력 시트는 반드시 해당 월의 행만 사용한다.
+                # 과거 파일에 전체 엑셀이 들어 있었더라도 다른 달 잔고를 합산하지 않는다.
+                if sheet_name == SHEET_INPUT:
+                    frame = input_frame_for_month(frame, archive_key)
+                    if frame.empty:
+                        continue
                 grouped.setdefault(sheet_name, []).append(frame)
                 archived_sheets.add(sheet_name)
             # 과거 저장본에 세부 입력 시트가 빠졌어도 원본 엑셀에서 복원해 그래프 공백을 막는다.
             if SHEET_INPUT not in archived_sheets:
-                restored_input = restore_input_from_original(archive)
+                restored_input = restore_input_from_original(archive, archive_key)
                 if restored_input is not None and not restored_input.empty:
                     grouped.setdefault(SHEET_INPUT, []).append(restored_input)
     result: dict[str, pd.DataFrame] = {}
@@ -331,13 +338,24 @@ def load_remote_sheets(repo: str, token_fingerprint: str) -> dict[str, pd.DataFr
     return result
 
 
-def restore_input_from_original(archive: zipfile.ZipFile) -> pd.DataFrame | None:
-    """이전 월별 파일에 입력 시트 JSON이 없으면 원본 엑셀에서 안전하게 복원한다."""
+def input_frame_for_month(df: pd.DataFrame, key: str) -> pd.DataFrame:
+    """월말 잔고 입력은 기준월이 확인된 행만 반환해 중복 누적을 원천 차단한다."""
+    month_col = find_col(df, ["기준월", "월", "년월", "기준년월"], required=False)
+    if not month_col:
+        return pd.DataFrame(columns=df.columns)
+    return df[df[month_col].map(month_key) == key].copy()
+
+
+def restore_input_from_original(archive: zipfile.ZipFile, key: str) -> pd.DataFrame | None:
+    """이전 월별 파일에 입력 시트 JSON이 없으면 원본에서 해당 월 행만 안전하게 복원한다."""
     original = next((name for name in archive.namelist() if name.startswith("original/") and not name.endswith("/")), None)
     if not original:
         return None
     try:
-        return load_workbook(archive.read(original)).get(SHEET_INPUT)
+        original_input = load_workbook(archive.read(original)).get(SHEET_INPUT)
+        if original_input is None:
+            return None
+        return input_frame_for_month(original_input, key)
     except Exception:
         return None
 
