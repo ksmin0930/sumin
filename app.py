@@ -887,14 +887,18 @@ try:
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
                     marker=dict(colors=[GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]),
-                    textinfo="label+percent", textposition="auto", textfont=dict(size=15, color="#000000"),
+                    # 라벨을 바깥으로 내보내면 좁은 화면에서 잘린다. 세부 값은
+                    # 옆 표에 모두 있으므로, 차트에서는 충분히 큰 조각만 내부 표기한다.
+                    textinfo="label+percent", textposition="inside", insidetextorientation="radial",
+                    textfont=dict(size=12, color="#000000"),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=17, color=INK))
                 fig.update_layout(
                     **plot_layout(350),
                     showlegend=False,
-                    uniformtext_minsize=12,
+                    margin=dict(l=8, r=8, t=8, b=8),
+                    uniformtext_minsize=11,
                     uniformtext_mode="hide",
                 )
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
