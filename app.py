@@ -910,12 +910,15 @@ try:
                     marker=dict(colors=pie_colors),
                     texttemplate="<b>%{label}</b><br>%{value:,.0f}원 · %{percent}",
                     textposition="outside",
-                    textfont=dict(size=10, color=INK),
+                    # 작은 조각의 하단 라벨까지 카드 안에 남기도록 원형과
+                    # 라벨 여백을 함께 자동 조정한다.
+                    automargin=True,
+                    textfont=dict(size=9, color=INK),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=15, color=INK))
                 fig.update_layout(
-                    **{**plot_layout(350), "margin": dict(l=78, r=78, t=16, b=16)},
+                    **{**plot_layout(350), "margin": dict(l=78, r=78, t=16, b=68)},
                     showlegend=False,
                 )
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
