@@ -901,24 +901,26 @@ try:
         if deposits.empty:
             empty_state("보통예금 상세 항목을 인식하지 못했습니다. 아래 ‘검산·원본’ 화면에서 입력 시트의 열 이름을 확인해 주세요.")
         else:
-            # 각 조각의 라벨을 바깥에 배치하면 Plotly가 연결선을 자동으로 그린다.
-            # 표와 차트를 세로로 배치해, 좁은 카드에서도 라벨 영역을 충분히 확보한다.
-            pie_colors = [GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]
-            fig = go.Figure(go.Pie(
-                labels=deposits["항목"], values=deposits["금액"], hole=.58,
-                marker=dict(colors=pie_colors),
-                texttemplate="<b>%{label}</b><br>%{value:,.0f}원 · %{percent}",
-                textposition="outside",
-                textfont=dict(size=10, color=INK),
-                hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
-            ))
-            fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=15, color=INK))
-            fig.update_layout(
-                **{**plot_layout(420), "margin": dict(l=105, r=105, t=18, b=18)},
-                showlegend=False,
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
-            st.markdown(f'<div class="table-frame">{html_money_table(deposits, True)}</div>', unsafe_allow_html=True)
+            # 원래의 가로 배치를 유지하면서, 조각별 바깥 라벨과 연결선을 표시한다.
+            chart_col, table_col = st.columns([1.42, 1], gap="small")
+            with chart_col:
+                pie_colors = [GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]
+                fig = go.Figure(go.Pie(
+                    labels=deposits["항목"], values=deposits["금액"], hole=.58,
+                    marker=dict(colors=pie_colors),
+                    texttemplate="<b>%{label}</b><br>%{value:,.0f}원 · %{percent}",
+                    textposition="outside",
+                    textfont=dict(size=10, color=INK),
+                    hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
+                ))
+                fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=15, color=INK))
+                fig.update_layout(
+                    **{**plot_layout(350), "margin": dict(l=78, r=78, t=16, b=16)},
+                    showlegend=False,
+                )
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+            with table_col:
+                st.markdown(f'<div class="table-frame">{html_money_table(deposits, True)}</div>', unsafe_allow_html=True)
 
     lower1, lower2, lower3 = st.columns([1, 1, 1.22], gap="small")
     with lower1:
