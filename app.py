@@ -895,9 +895,8 @@ try:
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=17, color=INK))
                 fig.update_layout(
-                    **plot_layout(350),
+                    **{**plot_layout(350), "margin": dict(l=8, r=8, t=8, b=8)},
                     showlegend=False,
-                    margin=dict(l=8, r=8, t=8, b=8),
                     uniformtext_minsize=11,
                     uniformtext_mode="hide",
                 )
