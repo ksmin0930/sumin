@@ -84,6 +84,11 @@ st.markdown(
     .simple-table .col-item{width:auto}.simple-table .col-money{width:42%}.simple-table .col-share{width:22%}
     .table-frame{min-height:350px;background:#fff;border:1px solid #E1E4E8;border-radius:4px;overflow:hidden}
     .table-frame.compact{min-height:255px}
+    .pie-key{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.32rem .55rem;margin:.15rem .1rem .45rem;}
+    .pie-key-item{display:flex;align-items:flex-start;gap:.34rem;min-width:0;color:#27342E;font-size:.78rem;line-height:1.28;}
+    .pie-key-dot{width:.7rem;height:.7rem;border-radius:50%;flex:0 0 .7rem;margin-top:.13rem;}
+    .pie-key-name{font-weight:800;overflow-wrap:anywhere;}.pie-key-value{white-space:nowrap;color:#56665D;}
+    @media(max-width:700px){.pie-key{grid-template-columns:1fr 1fr;gap:.25rem .35rem}.pie-key-item{font-size:.68rem;line-height:1.2}.pie-key-dot{width:.6rem;height:.6rem;flex-basis:.6rem;margin-top:.1rem}.pie-key-value{white-space:normal}.table-frame{min-height:auto}}
     @media(max-width:1000px){.kpi-grid{grid-template-columns:1fr}.op{height:18px;line-height:18px}.block-container{padding:.6rem}}
     .empty {background:#F9FBFA; border:1px dashed #9BB1A4; border-radius:14px; padding:1.35rem; color:#566A5F; font-size:1rem;}
     .upload-welcome {background:#FFFFFF; border:2px dashed #8EB09D; border-radius:20px; padding:2.2rem; text-align:center; margin-top:1rem;}
@@ -723,6 +728,21 @@ def html_money_table(df: pd.DataFrame, show_share: bool = False) -> str:
             f'<tfoot><tr><td>합계</td><td colspan="{colspan-1}">{total:,.0f}</td></tr></tfoot></table>')
 
 
+def html_pie_key(df: pd.DataFrame, colors: list[str]) -> str:
+    """원형 그래프의 색상·항목·금액·비중을 어느 화면 폭에서도 모두 표시한다."""
+    total = float(df["금액"].sum()) if not df.empty else 0
+    items = []
+    for index, (_, row) in enumerate(df.iterrows()):
+        share = float(row["금액"]) / total if total else 0
+        color = colors[index % len(colors)]
+        items.append(
+            f'<div class="pie-key-item"><span class="pie-key-dot" style="background:{color}"></span>'
+            f'<span><span class="pie-key-name">{escape(str(row["항목"]))}</span><br>'
+            f'<span class="pie-key-value">{row["금액"]:,.0f}원 · {share:.1%}</span></span></div>'
+        )
+    return f'<div class="pie-key" aria-label="보통예금 구성 항목 및 금액">{"".join(items)}</div>'
+
+
 def kpi_card(title: str, value: float, color: str, bg: str) -> str:
     return (f'<div class="kpi" style="--c:{color};--bg:{bg}"><div class="kpi-title">{escape(title)}</div>'
             f'<div class="kpi-main">{value/100_000_000:,.2f}<small>억 원</small></div>'
@@ -884,12 +904,13 @@ try:
             # 도넛을 표보다 넓게 배치해 항목명과 비율을 차트 안에서 충분히 보여준다.
             chart_col, table_col = st.columns([1.42, 1], gap="small")
             with chart_col:
+                pie_colors = [GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]
                 fig = go.Figure(go.Pie(
                     labels=deposits["항목"], values=deposits["금액"], hole=.58,
-                    marker=dict(colors=[GREEN, ORANGE, BLUE, "#7EAA8E", "#B5C9B8", "#9A79A7"]),
-                    # 라벨을 바깥으로 내보내면 좁은 화면에서 잘린다. 세부 값은
-                    # 옆 표에 모두 있으므로, 차트에서는 충분히 큰 조각만 내부 표기한다.
-                    textinfo="label+percent", textposition="inside", insidetextorientation="radial",
+                    marker=dict(colors=pie_colors),
+                    # 조각 안에는 비중을 간결하게, 바로 아래 범례에는 색상·항목·원금액을
+                    # 모두 표시한다. 범례는 CSS 반응형 격자라 좁은 화면에서도 잘리지 않는다.
+                    textinfo="percent", textposition="inside", insidetextorientation="radial",
                     textfont=dict(size=12, color="#000000"),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
@@ -901,6 +922,7 @@ try:
                     uniformtext_mode="hide",
                 )
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(html_pie_key(deposits, pie_colors), unsafe_allow_html=True)
             with table_col:
                 st.markdown(f'<div class="table-frame">{html_money_table(deposits, True)}</div>', unsafe_allow_html=True)
 
