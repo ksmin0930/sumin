@@ -514,10 +514,13 @@ def category_table(source: pd.DataFrame, selected: object, keywords: list[str]) 
 
 
 def display_deposit_labels(deposits: pd.DataFrame, selected: object) -> pd.DataFrame:
-    """6월부터 변경된 작목기금 명칭을 보통예금 구성에 일관되게 표시한다."""
+    """변경된 보통예금 항목명을 대시보드에 일관되게 표시한다."""
     shown = deposits.copy()
     if month_key(selected) >= "2026-06":
-        shown["항목"] = shown["항목"].replace({"연수원수입": "작목기금"})
+        shown["항목"] = shown["항목"].replace({
+            "연수원수입": "작목기금",
+            "수익": "수익(산지관리용역료 외)",
+        })
         shown = shown.groupby("항목", as_index=False)["금액"].sum().sort_values("금액", ascending=False)
     return shown
 
