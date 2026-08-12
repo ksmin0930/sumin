@@ -883,7 +883,7 @@ try:
         fig_flow = go.Figure(go.Waterfall(
             measure=measures, x=flow_labels, y=flow_values,
             text=[won(v) for v in flow_values], textposition="outside",
-           =dict(size=15, color=INK),
+            textfont=dict(size=15, color=INK),
             increasing={"marker": {"color": GREEN_2}}, decreasing={"marker": {"color": RED}},
             totals={"marker": {"color": BLUE}}, connector={"line": {"color": "#AAB7AE", "width": 2}},
             hovertemplate="<b>%{x}</b><br>%{y:,.0f}원<extra></extra>",
@@ -913,7 +913,8 @@ try:
                     # 작은 조각의 하단 라벨까지 카드 안에 남기도록 원형과
                     # 라벨 여백을 함께 자동 조정한다.
                     automargin=True,
-                    textfont=dict(size=11, color=INK),
+                    # 여백은 유지하되 연결 라벨은 12pt로 키워 읽기 쉽게 표시한다.
+                    textfont=dict(size=12, color=INK),
                     hovertemplate="<b>%{label}</b><br>%{value:,.0f}원<br>%{percent}<extra></extra>",
                 ))
                 fig.add_annotation(text=f"합계<br><b>{won(deposits['금액'].sum())}</b>", showarrow=False, font=dict(size=15, color=INK))
